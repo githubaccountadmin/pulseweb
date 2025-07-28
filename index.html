@@ -28,8 +28,12 @@
         input { margin: 10px; padding: 8px; width: 300px; background: rgba(34,0,51,0.8); color: #fff; border: 1px solid #ff00ff; border-radius: 5px; }
         button { padding: 10px 20px; background: linear-gradient(#ff00ff, #ff4500); color: #fff; border: none; cursor: pointer; border-radius: 5px; transition: transform 0.2s; }
         button:hover { transform: scale(1.05); box-shadow: 0 0 15px #ff00ff; }
+        button:active { animation: pulse 0.5s; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
         #cy { width: 100%; height: 800px; border: 1px solid #ff00ff; background: transparent; box-shadow: 0 0 20px rgba(255,0,255,0.5); }
         #wallet { margin: 10px; color: #00ffff; }
+        #loading { display: none; margin: 10px; color: #00ffff; font-size: 20px; text-shadow: 0 0 10px #ff00ff; animation: loading-pulse 1s infinite; }
+        @keyframes loading-pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
@@ -42,6 +46,7 @@
     <button onclick="findRoutes()">Ignite Routes</button>
     <button onclick="connectWallet()">Connect Wallet</button>
     <div id="wallet">Wallet: Not Connected</div>
+    <div id="loading">Loading routes...</div>
     <div id="cy"></div>
 
     <script>
@@ -58,13 +63,16 @@
         }
         drawStars();
 
-        // Auto-check wallet connection on load
+        // Auto-check wallet connection on load and listen for changes
         window.addEventListener('load', async () => {
             if (window.ethereum) {
                 const accounts = await window.ethereum.request({ method: 'eth_accounts' }).catch(() => []);
                 if (accounts.length > 0) {
                     document.getElementById('wallet').innerText = `Wallet: ${accounts[0]}`;
                 }
+                window.ethereum.on('accountsChanged', (accounts) => {
+                    document.getElementById('wallet').innerText = accounts.length > 0 ? `Wallet: ${accounts[0]}` : 'Wallet: Not Connected';
+                });
             }
         });
 
@@ -98,7 +106,7 @@
 
         async function getPairs(token) {
             const originalUrl = `https://api.geckoterminal.com/api/v2/networks/${NETWORK_SLUG}/tokens/${token.toLowerCase()}/pools?page=1&include=base_token,quote_token`;
-            const url = `https://api.allorigins.win/raw?url=${encodeURIComponent(originalUrl)}`;
+            const url = `https://corsproxy.io/?${encodeURIComponent(originalUrl)}`;
             try {
                 const res = await fetch(url);
                 const data = await res.json();
@@ -133,7 +141,7 @@
             }).filter(Boolean);
         }
 
-        async function findPaths(start, end, maxDepth = 4) { // Reduced depth
+        async function findPaths(start, end, maxDepth = 3) { // Reduced depth
             const paths = [];
             const cache = new Map(); 
             async function dfs(current, path, depth) {
@@ -145,11 +153,11 @@
                 if (!cache.has(current)) {
                     const response = await getPairs(current);
                     cache.set(current, parseGeckoPools(response, current));
-                    await sleep(200); // Delay to avoid rate limit
+                    await sleep(500); // Increased delay
                 }
                 const pairs = cache.get(current);
                 pairs.sort((a, b) => b.liquidity.usd - a.liquidity.usd); 
-                for (let pair of pairs.slice(0, 10)) { // Reduced branches
+                for (let pair of pairs.slice(0, 5)) { // Reduced branches
                     if (!path.some(p => p.token === pair.neighbor)) {
                         path.push({ token: pair.neighbor, liq: pair.liquidity.usd, pairAddress: pair.pairAddress, symbol: pair.symbol });
                         await dfs(pair.neighbor, path, depth + 1);
@@ -190,47 +198,54 @@
         async function findRoutes() {
             const start = document.getElementById('startToken').value;
             const end = document.getElementById('endToken').value;
-            const paths = await findPaths(start, end);
-            if (paths.length === 0) { alert('No paths found! Try deeper depth or check addresses.'); return; }
-            const elements = buildGraph(paths);
-            if (cy) cy.destroy();
-            cy = cytoscape({
-                container: document.getElementById('cy'),
-                elements,
-                style: [
-                    { selector: 'node', style: { 
-                        'shape': 'hexagon', 
-                        'background-color': '#ff00ff', 
-                        'label': 'data(label)', 
-                        'color': '#fff', 
-                        'text-outline-color': '#000', 
-                        'text-outline-width': 2,
-                        'text-valign': 'center',
-                        'text-halign': 'center',
-                        'border-width': 2,
-                        'border-color': '#00ffff'
-                    } },
-                    { selector: 'edge', style: { 
-                        'width': 3, 
-                        'line-color': '#00ffff', 
-                        'target-arrow-color': '#00ffff', 
-                        'target-arrow-shape': 'triangle', 
-                        'label': 'data(label)', 
-                        'font-size': 10, 
-                        'color': '#fff',
-                        'curve-style': 'bezier'
-                    } }
-                ],
-                layout: { name: 'breadthfirst', directed: true, roots: [start.toLowerCase()], spacingFactor: 1.5 }
-            });
-            cy.on('tap', 'node', evt => {
-                const node = evt.target;
-                if (node.id() !== start.toLowerCase() && node.id() !== end.toLowerCase()) {
-                    if (confirm(`Reroute avoiding ${node.data('label')}?`)) {
-                        alert('Reroute logic: Exclude this node and rescan (TODO: Implement full exclude in DFS).');
+            document.getElementById('loading').style.display = 'block';
+            try {
+                const paths = await findPaths(start, end);
+                if (paths.length === 0) { alert('No paths found! Try deeper depth or check addresses.'); return; }
+                const elements = buildGraph(paths);
+                if (cy) cy.destroy();
+                cy = cytoscape({
+                    container: document.getElementById('cy'),
+                    elements,
+                    style: [
+                        { selector: 'node', style: { 
+                            'shape': 'hexagon', 
+                            'background-color': '#ff00ff', 
+                            'label': 'data(label)', 
+                            'color': '#fff', 
+                            'text-outline-color': '#000', 
+                            'text-outline-width': 2,
+                            'text-valign': 'center',
+                            'text-halign': 'center',
+                            'border-width': 2,
+                            'border-color': '#00ffff'
+                        } },
+                        { selector: 'edge', style: { 
+                            'width': 3, 
+                            'line-color': '#00ffff', 
+                            'target-arrow-color': '#00ffff', 
+                            'target-arrow-shape': 'triangle', 
+                            'label': 'data(label)', 
+                            'font-size': 10, 
+                            'color': '#fff',
+                            'curve-style': 'bezier'
+                        } }
+                    ],
+                    layout: { name: 'breadthfirst', directed: true, roots: [start.toLowerCase()], spacingFactor: 1.5 }
+                });
+                cy.on('tap', 'node', evt => {
+                    const node = evt.target;
+                    if (node.id() !== start.toLowerCase() && node.id() !== end.toLowerCase()) {
+                        if (confirm(`Reroute avoiding ${node.data('label')}?`)) {
+                            alert('Reroute logic: Exclude this node and rescan (TODO: Implement full exclude in DFS).');
+                        }
                     }
-                }
-            });
+                });
+            } catch (e) {
+                alert('Error fetching routes: ' + e.message);
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
         }
     </script>
 </body>
