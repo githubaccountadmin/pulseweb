@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>PulseChain Hyperspace Route Mapper</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #0a0a0a; color: #fff; padding: 20px; }
+        input { margin: 10px; padding: 8px; width: 300px; background: #222; color: #fff; border: 1px solid #666; }
+        button { padding: 10px 20px; background: #ff4500; color: #fff; border: none; cursor: pointer; }
+        button:hover { background: #ff6500; }
+        #cy { width: 100%; height: 800px; border: 1px solid #666; background: #111; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+</head>
+<body>
+    <h1>Hyperspace Liquidity Navigator</h1>
+    <input id="startToken" placeholder="Start Token Address (e.g., pDAI)" value="0x6B175474E89094C44Da98b954EedeAC495271d0F">
+    <input id="endToken" placeholder="End Token Address (e.g., FED)" value="0x1D177CB9EfEEa49A8B97ab1C72785a3A37ABc9Ff">
+    <button onclick="findRoutes()">Ignite Routes</button>
+    <div id="cy"></div>
+
+    <script>
+        async function getPairs(token) {
+            const chainId = 'pulsechain';
+            const url = `https://api.dexscreener.com/token-pairs/v1/${chainId}/${token}`;
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                return data.pairs || [];
+            } catch (e) {
+                console.error('API error:', e);
+                return [];
+            }
+        }
+
+        // Alternative: Subgraph query (uncomment if needed)
+        // async function getPairsSubgraph(token) {
+        //     const url = 'https://graph.pulsechain.com/subgraphs/name/pulsechain/pulsexv2';
+        //     const query = `{ pairs(first: 100, where: {or: [{token0: "${token.toLowerCase()}"}, {token1: "${token.toLowerCase()}"}]}) { id token0 { id symbol } token1 { id symbol } reserveUSD } }`;
+        //     const res = await fetch(url, { method: 'POST', body: JSON.stringify({query}), headers: {'Content-Type': 'application/json'} });
+        //     const data = await res.json();
+        //     return data.data.pairs.map(p => ({
+        //         pairAddress: p.id,
+        //         baseToken: { address: p.token0.id, symbol: p.token0.symbol },
+        //         quoteToken: { address: p.token1.id, symbol: p.token1.symbol },
+        //         liquidity: { usd: parseFloat(p.reserveUSD) }
+        //     }));
+        // }
+
+        async function findPaths(start, end, maxDepth = 5) {
+            const paths = [];
+            async function dfs(current, path, depth) {
+                if (depth > maxDepth) return;
+                if (current.toLowerCase() === end.toLowerCase()) {
+                    paths.push([...path]);
+                    return;
+                }
+                const pairs = await getPairs(current);
+                for (let pair of pairs) {
+                    let neighbor = pair.baseToken.address.toLowerCase() === current.toLowerCase() ? pair.quoteToken.address.toLowerCase() : pair.baseToken.address.toLowerCase();
+                    if (!path.some(p => p.token === neighbor) && pair.liquidity.usd > 0) { // Avoid cycles, skip zero liq
+                        path.push({ token: neighbor, liq: pair.liquidity.usd, pairAddress: pair.pairAddress });
+                        await dfs(neighbor, path, depth + 1);
+                        path.pop();
+                    }
+                }
+            }
+            await dfs(start.toLowerCase(), [{ token: start.toLowerCase(), liq: Infinity, pairAddress: null }], 0);
+            paths.sort((a, b) => minLiq(b) - minLiq(a)); // Sort by min liq desc
+            function minLiq(path) { return Math.min(...path.slice(1).map(p => p.liq)); }
+            return paths.slice(0, 10); // Top 10 paths
+        }
+
+        function buildGraph(paths) {
+            const elements = [];
+            const nodeSet = new Set();
+            const edgeSet = new Set();
+            paths.forEach(path => {
+                path.forEach((node, i) => {
+                    if (!nodeSet.has(node.token)) {
+                        nodeSet.add(node.token);
+                        elements.push({ data: { id: node.token, label: node.token.slice(0, 6) + '...' } });
+                    }
+                    if (i > 0) {
+                        const prev = path[i - 1].token;
+                        const edgeId = prev + '-' + node.token;
+                        if (!edgeSet.has(edgeId)) {
+                            edgeSet.add(edgeId);
+                            elements.push({ data: { id: edgeId, source: prev, target: node.token, label: node.liq.toFixed(0) + ' USD Liq' } });
+                        }
+                    }
+                });
+            });
+            return elements;
+        }
+
+        let cy;
+        async function findRoutes() {
+            const start = document.getElementById('startToken').value;
+            const end = document.getElementById('endToken').value;
+            const paths = await findPaths(start, end);
+            if (paths.length === 0) { alert('No paths found! Try deeper depth or check addresses.'); return; }
+            const elements = buildGraph(paths);
+            if (cy) cy.destroy();
+            cy = cytoscape({
+                container: document.getElementById('cy'),
+                elements,
+                style: [
+                    { selector: 'node', style: { 'background-color': '#ff4500', 'label': 'data(label)', 'color': '#fff', 'text-outline-color': '#000', 'text-outline-width': 2 } },
+                    { selector: 'edge', style: { 'width': 3, 'line-color': '#ccc', 'target-arrow-color': '#ccc', 'target-arrow-shape': 'triangle', 'label': 'data(label)', 'font-size': 10, 'color': '#fff' } }
+                ],
+                layout: { name: 'breadthfirst', directed: true, roots: [start.toLowerCase()] }
+            });
+            cy.on('tap', 'node', evt => {
+                const node = evt.target;
+                if (node.id() !== start.toLowerCase() && node.id() !== end.toLowerCase()) {
+                    if (confirm(`Reroute avoiding ${node.data('label')}?`)) {
+                        alert('Reroute logic: Exclude this node and rescan (TODO: Implement full exclude in DFS).');
+                        // TODO: Refind paths excluding node.id()
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
