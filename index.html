@@ -58,6 +58,16 @@
         }
         drawStars();
 
+        // Auto-check wallet connection on load
+        window.addEventListener('load', async () => {
+            if (window.ethereum) {
+                const accounts = await window.ethereum.request({ method: 'eth_accounts' }).catch(() => []);
+                if (accounts.length > 0) {
+                    document.getElementById('wallet').innerText = `Wallet: ${accounts[0]}`;
+                }
+            }
+        });
+
         // Wallet Connect
         async function connectWallet() {
             if (!window.ethereum) return alert('Install MetaMask!');
@@ -84,9 +94,11 @@
         }
 
         const NETWORK_SLUG = 'pulsechain';
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
 
         async function getPairs(token) {
-            const url = `https://api.geckoterminal.com/api/v2/networks/${NETWORK_SLUG}/tokens/${token.toLowerCase()}/pools?page=1&include=base_token,quote_token`;
+            const originalUrl = `https://api.geckoterminal.com/api/v2/networks/${NETWORK_SLUG}/tokens/${token.toLowerCase()}/pools?page=1&include=base_token,quote_token`;
+            const url = `https://api.allorigins.win/raw?url=${encodeURIComponent(originalUrl)}`;
             try {
                 const res = await fetch(url);
                 const data = await res.json();
@@ -121,7 +133,7 @@
             }).filter(Boolean);
         }
 
-        async function findPaths(start, end, maxDepth = 5) {
+        async function findPaths(start, end, maxDepth = 4) { // Reduced depth
             const paths = [];
             const cache = new Map(); 
             async function dfs(current, path, depth) {
@@ -133,10 +145,11 @@
                 if (!cache.has(current)) {
                     const response = await getPairs(current);
                     cache.set(current, parseGeckoPools(response, current));
+                    await sleep(200); // Delay to avoid rate limit
                 }
                 const pairs = cache.get(current);
                 pairs.sort((a, b) => b.liquidity.usd - a.liquidity.usd); 
-                for (let pair of pairs.slice(0, 20)) { 
+                for (let pair of pairs.slice(0, 10)) { // Reduced branches
                     if (!path.some(p => p.token === pair.neighbor)) {
                         path.push({ token: pair.neighbor, liq: pair.liquidity.usd, pairAddress: pair.pairAddress, symbol: pair.symbol });
                         await dfs(pair.neighbor, path, depth + 1);
