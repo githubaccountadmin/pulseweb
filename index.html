@@ -32,7 +32,7 @@
         #wallet { margin: 10px; color: #00ffff; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
-    <script src="https://cdn.ethers.io/lib/ethers-5.7.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"></script>
 </head>
 <body>
     <canvas id="stars"></canvas>
@@ -45,7 +45,7 @@
     <div id="cy"></div>
 
     <script>
-        // Starfield particles (optimized: draw once, animate lightly)
+        // Starfield particles (optimized: static draw)
         const canvas = document.getElementById('stars');
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
@@ -83,8 +83,10 @@
             document.getElementById('wallet').innerText = `Wallet: ${address}`;
         }
 
+        const NETWORK_SLUG = 'pulsechain';
+
         async function getPairs(token) {
-            const url = `https://api.geckoterminal.com/api/v2/networks/pulsechain/tokens/${token.toLowerCase()}/pools?page=1&include=base_token,quote_token`;
+            const url = `https://api.geckoterminal.com/api/v2/networks/${NETWORK_SLUG}/tokens/${token.toLowerCase()}/pools?page=1&include=base_token,quote_token`;
             try {
                 const res = await fetch(url);
                 const data = await res.json();
@@ -100,15 +102,18 @@
             const included = response.included || [];
             const tokenMap = new Map(included.map(t => [t.id.toLowerCase(), t.attributes]));
             return pools.map(pool => {
-                const baseId = pool.relationships.base_token.data.id.toLowerCase();
-                const quoteId = pool.relationships.quote_token.data.id.toLowerCase();
-                const neighbor = baseId === current.toLowerCase() ? quoteId : baseId;
-                const symbol = tokenMap.get(neighbor)?.symbol || neighbor.slice(0,6);
+                const baseFullId = pool.relationships.base_token.data.id.toLowerCase();
+                const quoteFullId = pool.relationships.quote_token.data.id.toLowerCase();
+                const baseAddress = baseFullId.split('_')[1];
+                const quoteAddress = quoteFullId.split('_')[1];
+                const neighbor = baseAddress === current.toLowerCase() ? quoteAddress : baseAddress;
+                const neighborFullId = baseAddress === current.toLowerCase() ? quoteFullId : baseFullId;
+                const symbol = tokenMap.get(neighborFullId)?.symbol || neighbor.slice(0,6);
                 const usdLiq = parseFloat(pool.attributes.reserve_in_usd || 0);
-                return usdLiq > 1000 ? { // Optimize: filter low liq
+                return usdLiq > 1000 ? { // Filter low liq
                     pairAddress: pool.attributes.address,
-                    baseToken: { address: baseId, symbol: tokenMap.get(baseId)?.symbol },
-                    quoteToken: { address: quoteId, symbol: tokenMap.get(quoteId)?.symbol },
+                    baseToken: { address: baseAddress, symbol: tokenMap.get(baseFullId)?.symbol },
+                    quoteToken: { address: quoteAddress, symbol: tokenMap.get(quoteFullId)?.symbol },
                     liquidity: { usd: usdLiq },
                     neighbor,
                     symbol
@@ -118,7 +123,7 @@
 
         async function findPaths(start, end, maxDepth = 5) {
             const paths = [];
-            const cache = new Map(); // Optimize: cache pairs to avoid refetch
+            const cache = new Map(); // Cache pairs
             async function dfs(current, path, depth) {
                 if (depth > maxDepth) return;
                 if (current.toLowerCase() === end.toLowerCase()) {
@@ -130,9 +135,8 @@
                     cache.set(current, parseGeckoPools(response, current));
                 }
                 const pairs = cache.get(current);
-                // Sort pairs by liq desc for greedy better paths first
-                pairs.sort((a, b) => b.liquidity.usd - a.liquidity.usd);
-                for (let pair of pairs.slice(0, 20)) { // Limit to top 20 branches per node
+                pairs.sort((a, b) => b.liquidity.usd - a.liquidity.usd); // Greedy high liq first
+                for (let pair of pairs.slice(0, 20)) { // Limit branches
                     if (!path.some(p => p.token === pair.neighbor)) {
                         path.push({ token: pair.neighbor, liq: pair.liquidity.usd, pairAddress: pair.pairAddress, symbol: pair.symbol });
                         await dfs(pair.neighbor, path, depth + 1);
