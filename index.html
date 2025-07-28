@@ -4,11 +4,27 @@
     <meta charset="UTF-8">
     <title>PulseChain Hyperspace Route Mapper</title>
     <style>
-        body { font-family: Arial, sans-serif; background: #0a0a0a; color: #fff; padding: 20px; }
-        input { margin: 10px; padding: 8px; width: 300px; background: #222; color: #fff; border: 1px solid #666; }
-        button { padding: 10px 20px; background: #ff4500; color: #fff; border: none; cursor: pointer; }
-        button:hover { background: #ff6500; }
-        #cy { width: 100%; height: 800px; border: 1px solid #666; background: #111; }
+        body { 
+            font-family: Arial, sans-serif; 
+            background: radial-gradient(circle, rgba(0,0,0,1) 0%, rgba(10,0,50,1) 100%); 
+            color: #fff; 
+            padding: 20px; 
+            position: relative;
+            overflow: hidden;
+        }
+        body::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: url('data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz48c3ZnIHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxkZWZzPjxwYXR0ZXJuIGlkPSJncmlkIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0idHJhbnNwYXJlbnQiPjxwYXRoIGQ9Ik0gMjAwIDAgTCAwIDAgMCAyMDAiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxIiBvcGFjaXR5PSIwLjA1Ii8+PC9wYXR0ZXJuPjwvZGVmcz48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSJ1cmwoI2dyaWQpIi8+PC9zdmc+') repeat, 
+                        radial-gradient(circle at 10% 20%, rgba(255,255,255,0.1) 0%, transparent 20%),
+                        radial-gradient(circle at 90% 80%, rgba(255,255,255,0.1) 0%, transparent 20%);
+            z-index: -1;
+        }
+        input { margin: 10px; padding: 8px; width: 300px; background: rgba(34,34,34,0.8); color: #fff; border: 1px solid #666; }
+        button { padding: 10px 20px; background: linear-gradient(#ff4500, #ff6500); color: #fff; border: none; cursor: pointer; }
+        button:hover { background: linear-gradient(#ff6500, #ff8500); }
+        #cy { width: 100%; height: 800px; border: 1px solid #666; background: transparent; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
 </head>
@@ -21,31 +37,34 @@
 
     <script>
         async function getPairs(token) {
-            const chainId = 'pulsechain';
-            const url = `https://api.dexscreener.com/token-pairs/v1/${chainId}/${token}`;
+            const url = `https://api.geckoterminal.com/api/v2/networks/pulsechain/tokens/${token.toLowerCase()}/pools?page=1`;
             try {
                 const res = await fetch(url);
                 const data = await res.json();
-                return data.pairs || [];
+                return data.data || [];
             } catch (e) {
                 console.error('API error:', e);
                 return [];
             }
         }
 
-        // Alternative: Subgraph query (uncomment if needed)
-        // async function getPairsSubgraph(token) {
-        //     const url = 'https://graph.pulsechain.com/subgraphs/name/pulsechain/pulsexv2';
-        //     const query = `{ pairs(first: 100, where: {or: [{token0: "${token.toLowerCase()}"}, {token1: "${token.toLowerCase()}"}]}) { id token0 { id symbol } token1 { id symbol } reserveUSD } }`;
-        //     const res = await fetch(url, { method: 'POST', body: JSON.stringify({query}), headers: {'Content-Type': 'application/json'} });
-        //     const data = await res.json();
-        //     return data.data.pairs.map(p => ({
-        //         pairAddress: p.id,
-        //         baseToken: { address: p.token0.id, symbol: p.token0.symbol },
-        //         quoteToken: { address: p.token1.id, symbol: p.token1.symbol },
-        //         liquidity: { usd: parseFloat(p.reserveUSD) }
-        //     }));
-        // }
+        // Parse Gecko pools to standard format
+        function parseGeckoPools(pools, current) {
+            return pools.map(pool => {
+                const base = pool.attributes.base_token.address.toLowerCase();
+                const quote = pool.attributes.quote_token.address.toLowerCase();
+                const neighbor = base === current.toLowerCase() ? quote : base;
+                const symbol = base === current.toLowerCase() ? pool.attributes.quote_token.symbol : pool.attributes.base_token.symbol;
+                return {
+                    pairAddress: pool.attributes.address,
+                    baseToken: { address: base, symbol: pool.attributes.base_token.symbol },
+                    quoteToken: { address: quote, symbol: pool.attributes.quote_token.symbol },
+                    liquidity: { usd: parseFloat(pool.attributes.reserve_in_usd || 0) },
+                    neighbor,
+                    symbol
+                };
+            }).filter(p => p.liquidity.usd > 0);
+        }
 
         async function findPaths(start, end, maxDepth = 5) {
             const paths = [];
@@ -55,17 +74,17 @@
                     paths.push([...path]);
                     return;
                 }
-                const pairs = await getPairs(current);
+                const rawPairs = await getPairs(current);
+                const pairs = parseGeckoPools(rawPairs, current);
                 for (let pair of pairs) {
-                    let neighbor = pair.baseToken.address.toLowerCase() === current.toLowerCase() ? pair.quoteToken.address.toLowerCase() : pair.baseToken.address.toLowerCase();
-                    if (!path.some(p => p.token === neighbor) && pair.liquidity.usd > 0) { // Avoid cycles, skip zero liq
-                        path.push({ token: neighbor, liq: pair.liquidity.usd, pairAddress: pair.pairAddress });
-                        await dfs(neighbor, path, depth + 1);
+                    if (!path.some(p => p.token === pair.neighbor) ) { // Avoid cycles
+                        path.push({ token: pair.neighbor, liq: pair.liquidity.usd, pairAddress: pair.pairAddress, symbol: pair.symbol || pair.neighbor.slice(0,6) });
+                        await dfs(pair.neighbor, path, depth + 1);
                         path.pop();
                     }
                 }
             }
-            await dfs(start.toLowerCase(), [{ token: start.toLowerCase(), liq: Infinity, pairAddress: null }], 0);
+            await dfs(start.toLowerCase(), [{ token: start.toLowerCase(), liq: Infinity, pairAddress: null, symbol: 'START' }], 0);
             paths.sort((a, b) => minLiq(b) - minLiq(a)); // Sort by min liq desc
             function minLiq(path) { return Math.min(...path.slice(1).map(p => p.liq)); }
             return paths.slice(0, 10); // Top 10 paths
@@ -79,7 +98,7 @@
                 path.forEach((node, i) => {
                     if (!nodeSet.has(node.token)) {
                         nodeSet.add(node.token);
-                        elements.push({ data: { id: node.token, label: node.token.slice(0, 6) + '...' } });
+                        elements.push({ data: { id: node.token, label: node.symbol || node.token.slice(0, 6) + '...' } });
                     }
                     if (i > 0) {
                         const prev = path[i - 1].token;
@@ -106,17 +125,35 @@
                 container: document.getElementById('cy'),
                 elements,
                 style: [
-                    { selector: 'node', style: { 'background-color': '#ff4500', 'label': 'data(label)', 'color': '#fff', 'text-outline-color': '#000', 'text-outline-width': 2 } },
-                    { selector: 'edge', style: { 'width': 3, 'line-color': '#ccc', 'target-arrow-color': '#ccc', 'target-arrow-shape': 'triangle', 'label': 'data(label)', 'font-size': 10, 'color': '#fff' } }
+                    { selector: 'node', style: { 
+                        'shape': 'hexagon', 
+                        'background-color': '#ff4500', 
+                        'label': 'data(label)', 
+                        'color': '#fff', 
+                        'text-outline-color': '#000', 
+                        'text-outline-width': 2,
+                        'text-valign': 'center',
+                        'text-halign': 'center'
+                    } },
+                    { selector: 'edge', style: { 
+                        'width': 3, 
+                        'line-color': '#ccc', 
+                        'target-arrow-color': '#ccc', 
+                        'target-arrow-shape': 'triangle', 
+                        'label': 'data(label)', 
+                        'font-size': 10, 
+                        'color': '#fff',
+                        'curve-style': 'bezier'
+                    } }
                 ],
-                layout: { name: 'breadthfirst', directed: true, roots: [start.toLowerCase()] }
+                layout: { name: 'breadthfirst', directed: true, roots: [start.toLowerCase()], spacingFactor: 1.5 }
             });
             cy.on('tap', 'node', evt => {
                 const node = evt.target;
                 if (node.id() !== start.toLowerCase() && node.id() !== end.toLowerCase()) {
                     if (confirm(`Reroute avoiding ${node.data('label')}?`)) {
                         alert('Reroute logic: Exclude this node and rescan (TODO: Implement full exclude in DFS).');
-                        // TODO: Refind paths excluding node.id()
+                        // TODO: Add exclude list to DFS
                     }
                 }
             });
