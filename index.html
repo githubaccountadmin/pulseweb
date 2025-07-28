@@ -6,88 +6,144 @@
     <style>
         body { 
             font-family: Arial, sans-serif; 
-            background: radial-gradient(circle, rgba(0,0,0,1) 0%, rgba(10,0,50,1) 100%); 
+            background: linear-gradient(to bottom, #000, #220033); 
             color: #fff; 
             padding: 20px; 
             position: relative;
             overflow: hidden;
+            margin: 0;
         }
         body::before {
             content: '';
             position: absolute;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: url('data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz48c3ZnIHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxkZWZzPjxwYXR0ZXJuIGlkPSJncmlkIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0idHJhbnNwYXJlbnQiPjxwYXRoIGQ9Ik0gMjAwIDAgTCAwIDAgMCAyMDAiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxIiBvcGFjaXR5PSIwLjA1Ii8+PC9wYXR0ZXJuPjwvZGVmcz48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSJ1cmwoI2dyaWQpIi8+PC9zdmc+') repeat, 
-                        radial-gradient(circle at 10% 20%, rgba(255,255,255,0.1) 0%, transparent 20%),
-                        radial-gradient(circle at 90% 80%, rgba(255,255,255,0.1) 0%, transparent 20%);
+            background: radial-gradient(circle at 20% 30%, rgba(255,0,255,0.1) 0%, transparent 50%),
+                        radial-gradient(circle at 80% 70%, rgba(0,255,255,0.1) 0%, transparent 50%),
+                        url('data:image/svg+xml;base64,PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz48c3ZnIHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxkZWZzPjxwYXR0ZXJuIGlkPSJncmlkIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0idHJhbnNwYXJlbnQiPjxwYXRoIGQ9Ik0gMjAwIDAgTCAwIDAgMCAyMDAiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxIiBvcGFjaXR5PSIwLjA1Ii8+PC9wYXR0ZXJuPjwvZGVmcz48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSJ1cmwoI2dyaWQpIi8+PC9zdmc+') repeat;
             z-index: -1;
+            animation: nebula 20s linear infinite;
         }
-        input { margin: 10px; padding: 8px; width: 300px; background: rgba(34,34,34,0.8); color: #fff; border: 1px solid #666; }
-        button { padding: 10px 20px; background: linear-gradient(#ff4500, #ff6500); color: #fff; border: none; cursor: pointer; }
-        button:hover { background: linear-gradient(#ff6500, #ff8500); }
-        #cy { width: 100%; height: 800px; border: 1px solid #666; background: transparent; }
+        @keyframes nebula { 0% { opacity: 0.8; } 50% { opacity: 1; } 100% { opacity: 0.8; } }
+        canvas { position: absolute; top: 0; left: 0; z-index: -2; }
+        input { margin: 10px; padding: 8px; width: 300px; background: rgba(34,0,51,0.8); color: #fff; border: 1px solid #ff00ff; border-radius: 5px; }
+        button { padding: 10px 20px; background: linear-gradient(#ff00ff, #ff4500); color: #fff; border: none; cursor: pointer; border-radius: 5px; transition: transform 0.2s; }
+        button:hover { transform: scale(1.05); box-shadow: 0 0 15px #ff00ff; }
+        #cy { width: 100%; height: 800px; border: 1px solid #ff00ff; background: transparent; box-shadow: 0 0 20px rgba(255,0,255,0.5); }
+        #wallet { margin: 10px; color: #00ffff; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+    <script src="https://cdn.ethers.io/lib/ethers-5.7.umd.min.js"></script>
 </head>
 <body>
-    <h1>Hyperspace Liquidity Navigator</h1>
+    <canvas id="stars"></canvas>
+    <h1 style="text-shadow: 0 0 10px #ff00ff;">Hyperspace Liquidity Navigator</h1>
     <input id="startToken" placeholder="Start Token Address (e.g., pDAI)" value="0x6B175474E89094C44Da98b954EedeAC495271d0F">
     <input id="endToken" placeholder="End Token Address (e.g., FED)" value="0x1D177CB9EfEEa49A8B97ab1C72785a3A37ABc9Ff">
     <button onclick="findRoutes()">Ignite Routes</button>
+    <button onclick="connectWallet()">Connect Wallet</button>
+    <div id="wallet">Wallet: Not Connected</div>
     <div id="cy"></div>
 
     <script>
+        // Starfield particles (optimized: draw once, animate lightly)
+        const canvas = document.getElementById('stars');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        const ctx = canvas.getContext('2d');
+        function drawStars() {
+            ctx.fillStyle = '#fff';
+            for (let i = 0; i < 200; i++) {
+                ctx.fillRect(Math.random() * canvas.width, Math.random() * canvas.height, 1, 1);
+            }
+        }
+        drawStars();
+
+        // Wallet Connect
+        async function connectWallet() {
+            if (!window.ethereum) return alert('Install MetaMask!');
+            const provider = new ethers.providers.Web3Provider(window.ethereum);
+            await provider.send("eth_requestAccounts", []);
+            const chainId = await provider.getNetwork().then(net => net.chainId);
+            if (chainId !== 369) {
+                try {
+                    await window.ethereum.request({
+                        method: 'wallet_addEthereumChain',
+                        params: [{
+                            chainId: '0x171',
+                            chainName: 'PulseChain',
+                            nativeCurrency: { name: 'Pulse', symbol: 'PLS', decimals: 18 },
+                            rpcUrls: ['https://rpc.pulsechain.com'],
+                            blockExplorerUrls: ['https://scan.pulsechain.com']
+                        }]
+                    });
+                } catch (e) { console.error(e); }
+            }
+            const signer = provider.getSigner();
+            const address = await signer.getAddress();
+            document.getElementById('wallet').innerText = `Wallet: ${address}`;
+        }
+
         async function getPairs(token) {
-            const url = `https://api.geckoterminal.com/api/v2/networks/pulsechain/tokens/${token.toLowerCase()}/pools?page=1`;
+            const url = `https://api.geckoterminal.com/api/v2/networks/pulsechain/tokens/${token.toLowerCase()}/pools?page=1&include=base_token,quote_token`;
             try {
                 const res = await fetch(url);
                 const data = await res.json();
-                return data.data || [];
+                return data;
             } catch (e) {
                 console.error('API error:', e);
-                return [];
+                return { data: [], included: [] };
             }
         }
 
-        // Parse Gecko pools to standard format
-        function parseGeckoPools(pools, current) {
+        function parseGeckoPools(response, current) {
+            const pools = response.data || [];
+            const included = response.included || [];
+            const tokenMap = new Map(included.map(t => [t.id.toLowerCase(), t.attributes]));
             return pools.map(pool => {
-                const base = pool.attributes.base_token.address.toLowerCase();
-                const quote = pool.attributes.quote_token.address.toLowerCase();
-                const neighbor = base === current.toLowerCase() ? quote : base;
-                const symbol = base === current.toLowerCase() ? pool.attributes.quote_token.symbol : pool.attributes.base_token.symbol;
-                return {
+                const baseId = pool.relationships.base_token.data.id.toLowerCase();
+                const quoteId = pool.relationships.quote_token.data.id.toLowerCase();
+                const neighbor = baseId === current.toLowerCase() ? quoteId : baseId;
+                const symbol = tokenMap.get(neighbor)?.symbol || neighbor.slice(0,6);
+                const usdLiq = parseFloat(pool.attributes.reserve_in_usd || 0);
+                return usdLiq > 1000 ? { // Optimize: filter low liq
                     pairAddress: pool.attributes.address,
-                    baseToken: { address: base, symbol: pool.attributes.base_token.symbol },
-                    quoteToken: { address: quote, symbol: pool.attributes.quote_token.symbol },
-                    liquidity: { usd: parseFloat(pool.attributes.reserve_in_usd || 0) },
+                    baseToken: { address: baseId, symbol: tokenMap.get(baseId)?.symbol },
+                    quoteToken: { address: quoteId, symbol: tokenMap.get(quoteId)?.symbol },
+                    liquidity: { usd: usdLiq },
                     neighbor,
                     symbol
-                };
-            }).filter(p => p.liquidity.usd > 0);
+                } : null;
+            }).filter(Boolean);
         }
 
         async function findPaths(start, end, maxDepth = 5) {
             const paths = [];
+            const cache = new Map(); // Optimize: cache pairs to avoid refetch
             async function dfs(current, path, depth) {
                 if (depth > maxDepth) return;
                 if (current.toLowerCase() === end.toLowerCase()) {
                     paths.push([...path]);
                     return;
                 }
-                const rawPairs = await getPairs(current);
-                const pairs = parseGeckoPools(rawPairs, current);
-                for (let pair of pairs) {
-                    if (!path.some(p => p.token === pair.neighbor) ) { // Avoid cycles
-                        path.push({ token: pair.neighbor, liq: pair.liquidity.usd, pairAddress: pair.pairAddress, symbol: pair.symbol || pair.neighbor.slice(0,6) });
+                if (!cache.has(current)) {
+                    const response = await getPairs(current);
+                    cache.set(current, parseGeckoPools(response, current));
+                }
+                const pairs = cache.get(current);
+                // Sort pairs by liq desc for greedy better paths first
+                pairs.sort((a, b) => b.liquidity.usd - a.liquidity.usd);
+                for (let pair of pairs.slice(0, 20)) { // Limit to top 20 branches per node
+                    if (!path.some(p => p.token === pair.neighbor)) {
+                        path.push({ token: pair.neighbor, liq: pair.liquidity.usd, pairAddress: pair.pairAddress, symbol: pair.symbol });
                         await dfs(pair.neighbor, path, depth + 1);
                         path.pop();
                     }
                 }
             }
             await dfs(start.toLowerCase(), [{ token: start.toLowerCase(), liq: Infinity, pairAddress: null, symbol: 'START' }], 0);
-            paths.sort((a, b) => minLiq(b) - minLiq(a)); // Sort by min liq desc
+            paths.sort((a, b) => minLiq(b) - minLiq(a));
             function minLiq(path) { return Math.min(...path.slice(1).map(p => p.liq)); }
-            return paths.slice(0, 10); // Top 10 paths
+            return paths.slice(0, 10);
         }
 
         function buildGraph(paths) {
@@ -127,18 +183,20 @@
                 style: [
                     { selector: 'node', style: { 
                         'shape': 'hexagon', 
-                        'background-color': '#ff4500', 
+                        'background-color': '#ff00ff', 
                         'label': 'data(label)', 
                         'color': '#fff', 
                         'text-outline-color': '#000', 
                         'text-outline-width': 2,
                         'text-valign': 'center',
-                        'text-halign': 'center'
+                        'text-halign': 'center',
+                        'border-width': 2,
+                        'border-color': '#00ffff'
                     } },
                     { selector: 'edge', style: { 
                         'width': 3, 
-                        'line-color': '#ccc', 
-                        'target-arrow-color': '#ccc', 
+                        'line-color': '#00ffff', 
+                        'target-arrow-color': '#00ffff', 
                         'target-arrow-shape': 'triangle', 
                         'label': 'data(label)', 
                         'font-size': 10, 
@@ -153,7 +211,6 @@
                 if (node.id() !== start.toLowerCase() && node.id() !== end.toLowerCase()) {
                     if (confirm(`Reroute avoiding ${node.data('label')}?`)) {
                         alert('Reroute logic: Exclude this node and rescan (TODO: Implement full exclude in DFS).');
-                        // TODO: Add exclude list to DFS
                     }
                 }
             });
